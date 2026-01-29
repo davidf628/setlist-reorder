@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Setlist CSV Drag & Drop</title>
+
+  <!-- PapaParse for CSV parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- SortableJS for drag & drop -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7f9;
+      padding: 20px;
+    }
+
+    h1 {
+      margin-bottom: 0.5em;
+    }
+
+    #drop-zone {
+      border: 2px dashed #999;
+      background: white;
+      padding: 30px;
+      text-align: center;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      cursor: pointer;
+    }
+
+    #drop-zone.dragover {
+      border-color: #0077ff;
+      background: #eef5ff;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      background: white;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px 10px;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    th {
+      background: #f0f0f0;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+
+    tbody tr {
+      cursor: grab;
+    }
+
+    tbody tr.dragging {
+      opacity: 0.6;
+    }
+
+    .note {
+      margin-top: 15px;
+      font-size: 0.9em;
+      color: #444;
+    }
+
+    button {
+      margin-top: 15px;
+      padding: 10px 16px;
+      font-size: 1rem;
+      border-radius: 6px;
+      border: none;
+      background: #0077ff;
+      color: white;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #005fd4;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Setlist Drag & Drop Tool</h1>
+<p>Upload your CSV, then drag songs to rearrange your set list.</p>
+
+<div id="drop-zone">
+  Drop CSV file here or click to upload
+  <input type="file" id="file-input" accept=".csv" hidden />
+</div>
+
+<div id="table-container"></div>
+
+<button id="export-btn" style="display:none;">Export Updated CSV</button>
+
+<p class="note">
+  • <strong>Original Row</strong> is preserved from your Google Sheet.<br>
+  • <strong>Current Row</strong> updates automatically as you reorder songs.<br>
+  • Entire rows (all song data) move together.
+</p>
+
+<script>
+  const dropZone = document.getElementById("drop-zone");
+  const fileInput = document.getElementById("file-input");
+  const tableContainer = document.getElementById("table-container");
+  const exportBtn = document.getElementById("export-btn");
+
+  let headers = [];
+  let dataRows = [];
+
+  dropZone.addEventListener("click", () => fileInput.click());
+
+  dropZone.addEventListener("dragover", e => {
+    e.preventDefault();
+    dropZone.classList.add("dragover");
+  });
+
+  dropZone.addEventListener("dragleave", () => {
+    dropZone.classList.remove("dragover");
+  });
+
+  dropZone.addEventListener("drop", e => {
+    e.preventDefault();
+    dropZone.classList.remove("dragover");
+    handleFile(e.dataTransfer.files[0]);
+  });
+
+  fileInput.addEventListener("change", e => {
+    handleFile(e.target.files[0]);
+  });
+
+  function handleFile(file) {
+    if (!file) return;
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: results => {
+        setupData(results.data);
+        renderTable();
+        exportBtn.style.display = "inline-block";
+      }
+    });
+  }
+
+  function setupData(rows) {
+    headers = Object.keys(rows[0]);
+
+    dataRows = rows.map((row, index) => ({
+      __originalRow: index + 1,
+      __currentRow: index + 1,
+      ...row
+    }));
+  }
+
+  function renderTable() {
+    tableContainer.innerHTML = "";
+
+    const table = document.createElement("table");
+    const thead = document.createElement("thead");
+    const tbody = document.createElement("tbody");
+
+    const headerRow = document.createElement("tr");
+    headerRow.innerHTML = `
+      <th>Original Row</th>
+      <th>Current Row</th>
+      ${headers.map(h => `<th>${h}</th>`).join("")}
+    `;
+    thead.appendChild(headerRow);
+
+    dataRows.forEach(row => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${row.__originalRow}</td>
+        <td class="current-row">${row.__currentRow}</td>
+        ${headers.map(h => `<td>${row[h] ?? ""}</td>`).join("")}
+      `;
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    tableContainer.appendChild(table);
+
+    new Sortable(tbody, {
+      animation: 150,
+      onStart: evt => evt.item.classList.add("dragging"),
+      onEnd: evt => {
+        evt.item.classList.remove("dragging");
+        updateOrderFromDOM(tbody);
+      }
+    });
+  }
+
+  function updateOrderFromDOM(tbody) {
+    const rows = Array.from(tbody.children);
+
+    dataRows = rows.map((tr, index) => {
+      const originalRow = parseInt(tr.children[0].textContent, 10);
+      const rowData = dataRows.find(r => r.__originalRow === originalRow);
+      rowData.__currentRow = index + 1;
+      tr.querySelector(".current-row").textContent = rowData.__currentRow;
+      return rowData;
+    });
+  }
+
+  exportBtn.addEventListener("click", () => {
+    const exportHeaders = ["Original Row", "Current Row", ...headers];
+
+    const exportData = dataRows.map(r => ({
+      "Original Row": r.__originalRow,
+      "Current Row": r.__currentRow,
+      ...headers.reduce((acc, h) => {
+        acc[h] = r[h];
+        return acc;
+      }, {})
+    }));
+
+    const csv = Papa.unparse({
+      fields: exportHeaders,
+      data: exportData
+    });
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "reordered_setlist.csv";
+    a.click();
+
+    URL.revokeObjectURL(url);
+  });
+</script>
+
+</body>
+</html>
